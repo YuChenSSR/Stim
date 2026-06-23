@@ -1,0 +1,24 @@
+[package]
+name = "stim-core"
+version = "0.1.0"
+edition = "2021"
+description = "Proof-of-concept Rust port of Stim's SIMD memory layer and Pauli-frame batch sampler"
+license = "Apache-2.0"
+
+[dependencies]
+rand = "0.8"
+rand_pcg = "0.3"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[features]
+# Enables hand-written AVX2 acceleration of the bulk bitwise loops.
+# Falls back to a portable 64-bit-word implementation when disabled or when
+# the target CPU lacks AVX2.
+default = ["simd256"]
+simd256 = []
+
+[[bench]]
+name = "frame"
+harness = false

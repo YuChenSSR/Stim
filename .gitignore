@@ -1,6 +1,8 @@
 .idea
 cmake-build-debug
 a.out
+rust/target
+rust/stim-core/examples/rates.rs
 perf.data
 perf.data.old
 CMakeFiles/*
