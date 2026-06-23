@@ -19,13 +19,23 @@ Rust toolchain (`cargo build`).
 | Row-major bit matrix | `mem/simd_bit_table.rs` | `src/stim/mem/simd_bit_table.*` |
 | Circuit IR + `.stim` subset parser | `circuit.rs` | `src/stim/circuit/*` |
 | Pauli-frame batch sampler | `frame_simulator.rs` | `src/stim/simulators/frame_simulator.*` |
-| Sampling entry points | `sample.rs` | `CompiledMeasurementSampler` |
+| Stabilizer tableau simulator (CHP) | `tableau_simulator.rs` | `src/stim/simulators/tableau_simulator.*` |
+| Sampling entry points (flips + absolute) | `sample.rs` | `CompiledMeasurementSampler` |
 
 **Gate subset:** `I X Y Z H S CX/ZCX CZ/ZCZ SWAP R M MR X_ERROR Y_ERROR Z_ERROR
 DEPOLARIZE1 DEPOLARIZE2`, plus `REPEAT` blocks and ignored annotations
-(`TICK`, `QUBIT_COORDS`, `DETECTOR`, ...). Measurements are recorded as *flips*
-relative to the noiseless reference (Stim's convention); for reset-then-measure
-circuits these equal the absolute measurement bits.
+(`TICK`, `QUBIT_COORDS`, `DETECTOR`, ...).
+
+### Two simulators, two sampling modes
+
+- **Frame simulator** (`sample_flips`) records measurement *flips* relative to a
+  noiseless reference — fast, batched, SIMD across shots.
+- **Tableau simulator** is an exact CHP stabilizer simulator (Aaronson–Gottesman)
+  producing a single noiseless **reference sample**.
+- **`sample`** combines them exactly like Stim: one tableau reference run XORed
+  with the frame flips gives **absolute** measurement samples for *arbitrary*
+  circuits — including ones with genuinely random measurements (e.g. measuring
+  `H|0> = |+>` with no reset), which the flip-only mode cannot express.
 
 ## Key design decisions
 
@@ -60,31 +70,41 @@ python3 stim-core/tests/cross_check_stim.py   # vs C++ Stim (needs: pip install 
 3. **Statistical noise correctness** (`tests/statistics.rs`) — `X/Y/Z_ERROR` and
    `DEPOLARIZE1` flip rates, error propagation through CX, and a distance-2
    repetition-code parity check, all matching analytic expectations.
-4. **Cross-check vs C++ Stim** (`tests/cross_check_stim.py`) — compares
-   per-measurement flip rates against `stim` (the pip package) on a noisy
-   repetition-code circuit.
+4. **Tableau simulator + absolute sampler** (`tests/tableau.rs`) — exact
+   prepare/measure, Bell/GHZ correlations, reset, and the absolute sampler
+   (random measurements uniform, GHZ correlations preserved per shot,
+   deterministic circuits constant).
+5. **Cross-check vs C++ Stim** (`tests/cross_check_stim.py`) — compares
+   per-measurement rates against `stim` (the pip package) for both the
+   flip-rate mode (noisy repetition code) and the absolute sampler (a circuit
+   with random measurements *and* noise).
 
 ### Measured results (this machine)
 
-- All 27 Rust tests pass.
-- Cross-check vs **C++ Stim 1.16.0**: max per-measurement rate difference
-  **0.0024** (tolerance 0.01) over 200k shots — i.e. the Rust sampler agrees
-  with C++ Stim to sampling noise.
+- All **36** Rust tests pass.
+- Cross-check vs **C++ Stim 1.16.0** over 200k shots (tolerance 0.01):
+  - flip-rate mode (noisy repetition code): max rate difference **0.0025**
+  - absolute sampler (random + noisy circuit): max rate difference **0.0023**
+  - i.e. the Rust simulators agree with C++ Stim to sampling noise.
 - Throughput (`dense_256q_50layers_1024shots`): **~195–224 billion
   qubit-gate-shots/sec** with AVX2 enabled — same order of magnitude as the
   C++ frame simulator's headline rate.
 
 ## Conclusion / recommendation
 
-The hardest 40% of a Stim→Rust port — the SIMD memory layer and the batch
-sampler hot path — translates cleanly to **safe, stable, fast Rust** with no
-nightly features and only a thin, well-contained `unsafe` boundary around the
-AVX2 intrinsics. Correctness matches C++ Stim and throughput is competitive.
+Two of Stim's flagship simulators — the SIMD frame sampler (the performance
+hot path) and the CHP tableau simulator — now run in **safe, stable, fast Rust**
+with no nightly features and only a thin, well-contained `unsafe` boundary
+around the AVX2 intrinsics. They are wired together into Stim's actual sampling
+architecture (tableau reference XOR frame flips), and the absolute sampler
+matches C++ Stim to sampling noise on arbitrary circuits.
 
-A fuller port is therefore feasible as an engineering (not research) effort.
-Natural next steps, roughly in order:
+A fuller port is feasible as an engineering (not research) effort. Remaining
+work, roughly in order:
 
-1. Remaining gates + the rest of the `frame_simulator` gate table.
-2. `TableauSimulator` and `PauliString`/`Tableau` (reuses this SIMD layer).
-3. Detector error models + reference-sample integration for absolute sampling.
-4. PyO3/maturin bindings to expose a `stim`-compatible Python API.
+1. ~~`TableauSimulator` + reference-sample integration~~ ✅ (this stage)
+2. The rest of the gate table (two-qubit measurements, `MPP`, `SPP`,
+   `SQRT_XX/YY/ZZ`, heralded noise, sweep/measurement-record targets).
+3. `PauliString` / `Tableau` value types and `detector_error_model` extraction.
+4. Streaming I/O (`b8`/`dets`/`01` formats) and a CLI matching `stim sample`.
+5. PyO3/maturin bindings to expose a `stim`-compatible Python API.

@@ -32,7 +32,7 @@ pub struct FrameSimulator {
 
 impl FrameSimulator {
     pub fn new(num_qubits: usize, batch_size: usize, rng: Pcg64) -> Self {
-        FrameSimulator {
+        let mut sim = FrameSimulator {
             num_qubits,
             batch_size,
             x_table: SimdBitTable::new(num_qubits, batch_size),
@@ -40,7 +40,15 @@ impl FrameSimulator {
             m_record: Vec::new(),
             rng,
             guarantee_anticommutation_via_frame_randomization: true,
+        };
+        // Stim randomizes the Z frame of every qubit when it is first allocated.
+        // This is what makes measuring a freshly-prepared |+> (e.g. H on |0>
+        // with no reset) come out uniformly random once combined with the
+        // reference sample.
+        for q in 0..num_qubits {
+            sim.randomize_z(q);
         }
+        sim
     }
 
     pub fn measurement_flips(&self) -> &[SimdBits] {

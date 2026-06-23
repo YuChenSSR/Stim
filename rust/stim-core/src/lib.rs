@@ -18,6 +18,7 @@
 pub mod circuit;
 pub mod frame_simulator;
 pub mod sample;
+pub mod tableau_simulator;
 
 pub mod mem {
     pub mod bitword;
@@ -27,4 +28,5 @@ pub mod mem {
 
 pub use circuit::{Circuit, Gate};
 pub use frame_simulator::FrameSimulator;
-pub use sample::{measurement_flip_rates, sample_flips};
+pub use sample::{measurement_flip_rates, sample, sample_flips};
+pub use tableau_simulator::TableauSimulator;
