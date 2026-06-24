@@ -6,9 +6,9 @@
 //!   * integer qubit targets
 //!   * `#` line comments
 //!   * `REPEAT n { ... }` blocks (flattened on parse)
-//!   * annotation instructions that don't affect measurement sampling
-//!     (`TICK`, `QUBIT_COORDS`, `SHIFT_COORDS`, `DETECTOR`, `OBSERVABLE_INCLUDE`)
-//!     which are ignored.
+//!   * `rec[-k]` measurement-record targets (for `DETECTOR` / `OBSERVABLE_INCLUDE`)
+//!   * pure-annotation instructions that are ignored (`TICK`, `QUBIT_COORDS`,
+//!     `SHIFT_COORDS`)
 
 /// Supported gates. Pauli gates (X/Y/Z) are intentionally frame no-ops: in the
 /// Pauli-frame / measurement-flip picture a deterministic Pauli only shifts the
@@ -32,6 +32,12 @@ pub enum Gate {
     ZError,
     Depolarize1,
     Depolarize2,
+    /// Annotation: a detector. Its `targets` are measurement-record lookback
+    /// offsets `k` (from `rec[-k]`), not qubit indices.
+    Detector,
+    /// Annotation: include measurement records into a logical observable. Its
+    /// `args[0]` is the observable index; `targets` are lookback offsets.
+    ObservableInclude,
 }
 
 impl Gate {
@@ -42,6 +48,11 @@ impl Gate {
 
     pub fn is_two_qubit(self) -> bool {
         matches!(self, Gate::Cx | Gate::Cz | Gate::Swap | Gate::Depolarize2)
+    }
+
+    /// Whether this gate's `targets` are qubit indices (vs. record lookbacks).
+    pub fn targets_are_qubits(self) -> bool {
+        !matches!(self, Gate::Detector | Gate::ObservableInclude)
     }
 }
 
@@ -62,11 +73,12 @@ impl Circuit {
         Circuit::default()
     }
 
-    /// Highest qubit index referenced + 1.
+    /// Highest qubit index referenced + 1. Only counts gates whose targets are
+    /// qubit indices (excludes DETECTOR / OBSERVABLE_INCLUDE record lookbacks).
     pub fn num_qubits(&self) -> usize {
         self.instructions
             .iter()
-            .filter(|i| !matches!(i.gate, Gate::I)) // I may carry no targets
+            .filter(|i| i.gate.targets_are_qubits())
             .flat_map(|i| i.targets.iter())
             .map(|&q| q as usize + 1)
             .max()
@@ -79,6 +91,25 @@ impl Circuit {
             .iter()
             .map(|i| i.gate.measurements_per_target() * i.targets.len())
             .sum()
+    }
+
+    /// Number of detectors (DETECTOR annotations).
+    pub fn num_detectors(&self) -> usize {
+        self.instructions
+            .iter()
+            .filter(|i| i.gate == Gate::Detector)
+            .count()
+    }
+
+    /// Number of distinct observables (max OBSERVABLE_INCLUDE index + 1).
+    pub fn num_observables(&self) -> usize {
+        self.instructions
+            .iter()
+            .filter(|i| i.gate == Gate::ObservableInclude)
+            .filter_map(|i| i.args.first())
+            .map(|&idx| idx as usize + 1)
+            .max()
+            .unwrap_or(0)
     }
 
     /// Parses a circuit from Stim text format (supported subset).
@@ -112,16 +143,26 @@ fn gate_from_name(name: &str) -> Option<Gate> {
         "Z_ERROR" => Gate::ZError,
         "DEPOLARIZE1" => Gate::Depolarize1,
         "DEPOLARIZE2" => Gate::Depolarize2,
+        "DETECTOR" => Gate::Detector,
+        "OBSERVABLE_INCLUDE" => Gate::ObservableInclude,
         _ => return None,
     })
 }
 
-/// Instructions that are accepted but ignored for measurement sampling.
+/// Instructions that are accepted but ignored for sampling (pure annotations).
 fn is_ignored_annotation(name: &str) -> bool {
-    matches!(
-        name,
-        "TICK" | "QUBIT_COORDS" | "SHIFT_COORDS" | "DETECTOR" | "OBSERVABLE_INCLUDE"
-    )
+    matches!(name, "TICK" | "QUBIT_COORDS" | "SHIFT_COORDS")
+}
+
+/// Parses a `rec[-k]` measurement-record target into the lookback `k` (> 0).
+fn parse_rec(word: &str) -> Option<u32> {
+    let inner = word.strip_prefix("rec[")?.strip_suffix(']')?;
+    let v: i64 = inner.parse().ok()?;
+    if v < 0 {
+        Some((-v) as u32)
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -300,7 +341,16 @@ impl Parser {
                     self.next();
                 }
                 Token::Word(w) => {
-                    return Err(format!("unsupported target '{}' in '{}'", w, name));
+                    let w = w.clone();
+                    match parse_rec(&w) {
+                        Some(k) => {
+                            targets.push(k);
+                            self.next();
+                        }
+                        None => {
+                            return Err(format!("unsupported target '{}' in '{}'", w, name))
+                        }
+                    }
                 }
                 _ => {
                     self.next();

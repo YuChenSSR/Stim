@@ -28,5 +28,5 @@ pub mod mem {
 
 pub use circuit::{Circuit, Gate};
 pub use frame_simulator::FrameSimulator;
-pub use sample::{measurement_flip_rates, sample, sample_flips};
+pub use sample::{measurement_flip_rates, sample, sample_detectors, sample_flips, DetectorSample};
 pub use tableau_simulator::TableauSimulator;

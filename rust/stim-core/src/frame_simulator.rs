@@ -24,6 +24,10 @@ pub struct FrameSimulator {
     z_table: SimdBitTable,
     /// One row per measurement; each row holds the flip bit per shot.
     m_record: Vec<SimdBits>,
+    /// One row per detector; each row holds the detection-event flip per shot.
+    det_record: Vec<SimdBits>,
+    /// One row per observable; accumulates observable flips per shot.
+    obs_record: Vec<SimdBits>,
     rng: Pcg64,
     /// Mirrors Stim's flag: inject 50% random Z components when measuring/
     /// resetting in Z so that anticommuting follow-up operations stay correct.
@@ -38,6 +42,8 @@ impl FrameSimulator {
             x_table: SimdBitTable::new(num_qubits, batch_size),
             z_table: SimdBitTable::new(num_qubits, batch_size),
             m_record: Vec::new(),
+            det_record: Vec::new(),
+            obs_record: Vec::new(),
             rng,
             guarantee_anticommutation_via_frame_randomization: true,
         };
@@ -53,6 +59,16 @@ impl FrameSimulator {
 
     pub fn measurement_flips(&self) -> &[SimdBits] {
         &self.m_record
+    }
+
+    /// Detection-event flips, one `SimdBits` row per detector.
+    pub fn detection_flips(&self) -> &[SimdBits] {
+        &self.det_record
+    }
+
+    /// Observable flips, one `SimdBits` row per observable.
+    pub fn observable_flips(&self) -> &[SimdBits] {
+        &self.obs_record
     }
 
     /// Reads the Pauli frame of a single shot as (xs, zs) bit vectors.
@@ -165,6 +181,25 @@ impl FrameSimulator {
             Gate::ZError => self.pauli_error(inst, false, true),
             Gate::Depolarize1 => self.depolarize1(inst),
             Gate::Depolarize2 => self.depolarize2(inst),
+            Gate::Detector => {
+                // Detection event = XOR of the referenced measurement flips.
+                let mut det = SimdBits::new(self.batch_size);
+                let n = self.m_record.len();
+                for &k in &inst.targets {
+                    det.xor_assign(&self.m_record[n - k as usize]);
+                }
+                self.det_record.push(det);
+            }
+            Gate::ObservableInclude => {
+                let idx = inst.args.first().copied().unwrap_or(0.0) as usize;
+                while self.obs_record.len() <= idx {
+                    self.obs_record.push(SimdBits::new(self.batch_size));
+                }
+                let n = self.m_record.len();
+                for &k in &inst.targets {
+                    self.obs_record[idx].xor_assign(&self.m_record[n - k as usize]);
+                }
+            }
         }
     }
 

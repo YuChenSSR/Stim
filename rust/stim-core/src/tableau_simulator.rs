@@ -238,8 +238,15 @@ impl TableauSimulator {
                     self.reset(q as usize);
                 }
             }
-            // Noise is not part of the noiseless reference run.
-            Gate::XError | Gate::YError | Gate::ZError | Gate::Depolarize1 | Gate::Depolarize2 => {}
+            // Noise is not part of the noiseless reference run; DETECTOR /
+            // OBSERVABLE_INCLUDE are annotations folded from the record later.
+            Gate::XError
+            | Gate::YError
+            | Gate::ZError
+            | Gate::Depolarize1
+            | Gate::Depolarize2
+            | Gate::Detector
+            | Gate::ObservableInclude => {}
         }
     }
 }
