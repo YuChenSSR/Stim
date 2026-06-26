@@ -1,0 +1,16 @@
+[package]
+name = "stim-py"
+version = "0.1.0"
+edition = "2021"
+description = "PyO3 Python bindings for the stim-core proof-of-concept"
+license = "Apache-2.0"
+
+[lib]
+# Import name in Python is `stimcore`; build produces lib<name>.so.
+name = "stimcore"
+crate-type = ["cdylib"]
+
+[dependencies]
+stim-core = { path = "../stim-core" }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"

@@ -21,6 +21,7 @@ Rust toolchain (`cargo build`).
 | Pauli-frame batch sampler | `frame_simulator.rs` | `src/stim/simulators/frame_simulator.*` |
 | Stabilizer tableau simulator (CHP) | `tableau_simulator.rs` | `src/stim/simulators/tableau_simulator.*` |
 | Sampling entry points (measurements + detectors) | `sample.rs` | `CompiledMeasurementSampler`, `CompiledDetectorSampler` |
+| Python bindings (`stimcore` module) | `../stim-py/src/lib.rs` | `glue/python` (pybind11 → here PyO3) |
 
 **Gate subset:** `I X Y Z H S CX/ZCX CZ/ZCZ SWAP R M MR X_ERROR Y_ERROR Z_ERROR
 DEPOLARIZE1 DEPOLARIZE2`, the `DETECTOR` and `OBSERVABLE_INCLUDE` annotations
@@ -44,6 +45,28 @@ annotations (`TICK`, `QUBIT_COORDS`, `SHIFT_COORDS`).
   detectors are deterministic in the noiseless circuit, which the sampler
   asserts in debug builds.
 
+### Python bindings (`stimcore`)
+
+A PyO3 extension (`rust/stim-py`) exposes a small, Stim-flavoured API so the Rust
+simulators can be driven from Python and compared directly to the `stim` pip
+package. Build it without maturin via the helper script:
+
+```bash
+rust/stim-py/build.sh           # -> rust/stim-py/stimcore.so
+PYTHONPATH=rust/stim-py python3 -c "
+import stimcore
+c = stimcore.Circuit('H 0\nCX 0 1\nM 0 1')
+print(c.num_qubits)             # 2
+s = c.sample(shots=1000)        # numpy bool array (1000, 2)
+det, obs = stimcore.Circuit(open('rep.stim').read()).sample_detectors(shots=1000)
+"
+```
+
+`Circuit` exposes `num_qubits` / `num_measurements` / `num_detectors` /
+`num_observables`, `sample(shots, seed=0)`, and `sample_detectors(shots, seed=0)`
+returning numpy `bool` arrays — mirroring `compile_sampler` /
+`compile_detector_sampler`.
+
 ## Key design decisions
 
 - **No `unsafe` aliasing.** Stim aliases one buffer as `u8*`/`u64*`/`__m256i*`
@@ -66,7 +89,8 @@ Run everything with:
 cd rust
 cargo test                 # 41 tests: SIMD unit + deterministic + statistical + detectors
 cargo bench --bench frame  # throughput
-python3 stim-core/tests/cross_check_stim.py   # vs C++ Stim (needs: pip install stim)
+python3 stim-core/tests/cross_check_stim.py   # core vs C++ Stim (needs: pip install stim)
+python3 stim-py/tests/cross_check_py.py       # Python extension vs C++ Stim
 ```
 
 1. **SIMD unit tests** (`tests/mem.rs`) — padding, get/set/xor, bulk
@@ -85,11 +109,14 @@ python3 stim-core/tests/cross_check_stim.py   # vs C++ Stim (needs: pip install 
    quiet detectors without noise, a deterministic data error lighting exactly
    one detector, and `X_ERROR`/observable rates matching the injected
    probability.
-6. **Cross-check vs C++ Stim** (`tests/cross_check_stim.py`) — compares
+6. **Cross-check vs C++ Stim** (`stim-core/tests/cross_check_stim.py`) — compares
    per-column rates against `stim` (the pip package) for the flip-rate mode, the
    absolute sampler (random + noisy), and — most importantly — the detector
    sampler and observable flips on a **stim-generated `repetition_code:memory`
    d3/r3 circuit** (`compile_detector_sampler`).
+7. **Python extension cross-check** (`stim-py/tests/cross_check_py.py`) — builds
+   the `stimcore` PyO3 module, then checks its `sample` and `sample_detectors`
+   against `stim` on the GHZ+noise and generated repetition-code circuits.
 
 ### Measured results (this machine)
 
@@ -99,6 +126,7 @@ python3 stim-core/tests/cross_check_stim.py   # vs C++ Stim (needs: pip install 
   - absolute sampler (random + noisy circuit): max rate difference **~0.002**
   - detector sampler (generated repetition_code d3/r3, 8 detectors): **~0.001**
   - observable flips (same circuit): **~0.001**
+  - **Python `stimcore` extension** vs C++ Stim (same circuits): **~0.001**
   - i.e. the Rust simulators agree with C++ Stim to sampling noise.
 - Throughput (`dense_256q_50layers_1024shots`): **~195–224 billion
   qubit-gate-shots/sec** with AVX2 enabled — same order of magnitude as the
@@ -112,15 +140,18 @@ with no nightly features and only a thin, well-contained `unsafe` boundary
 around the AVX2 intrinsics. They are wired together into Stim's actual sampling
 architecture, providing both **measurement sampling** and **detector/observable
 sampling** that match C++ Stim to sampling noise on arbitrary circuits — verified
-end-to-end against a stim-generated QEC memory experiment.
+end-to-end against a stim-generated QEC memory experiment, and exposed to Python
+through a PyO3 extension that can be cross-checked directly against the `stim`
+pip package.
 
 A fuller port is feasible as an engineering (not research) effort. Remaining
 work, roughly in order:
 
 1. ~~`TableauSimulator` + reference-sample integration~~ ✅ (stage 2)
 2. ~~Detector / observable sampling (`compile_detector_sampler`)~~ ✅ (stage 3)
-3. The rest of the gate table (two-qubit measurements, `MPP`, `SPP`,
+3. ~~PyO3 Python bindings (`stimcore` module)~~ ✅ (stage 4)
+4. The rest of the gate table (two-qubit measurements, `MPP`, `SPP`,
    `SQRT_XX/YY/ZZ`, heralded noise, sweep targets).
-4. `PauliString` / `Tableau` value types and `detector_error_model` extraction.
-5. Streaming I/O (`b8`/`dets`/`01` formats) and a CLI matching `stim sample`.
-6. PyO3/maturin bindings to expose a `stim`-compatible Python API.
+5. `PauliString` / `Tableau` value types and `detector_error_model` extraction.
+6. Streaming I/O (`b8`/`dets`/`01` formats) and a CLI matching `stim sample`;
+   package the extension as a wheel with maturin.

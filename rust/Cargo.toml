@@ -1,5 +1,5 @@
 [workspace]
-members = ["stim-core"]
+members = ["stim-core", "stim-py"]
 resolver = "2"
 
 [profile.release]
